@@ -127,12 +127,28 @@
 
 <script>
   /* ===============================
-     1. 상단 메뉴 & URL (고정 데이터)
+     0) russel.json 로딩 (성적별 추천용)
+     =============================== */
+  let COURSE_DATA = [];
+
+  fetch("russel.json")
+    .then(res => res.json())
+    .then(data => {
+      COURSE_DATA = data;
+      console.log("시간표 JSON 로딩 완료", COURSE_DATA);
+    })
+    .catch(err => {
+      console.error("russel.json 로딩 오류:", err);
+    });
+
+  const RECOMMEND_MENU_KEY = "성적별 수업 추천";
+  const SUBJECT_LIST = ["국어", "수학", "영어", "사회", "과학", "논술"];
+  const LEVEL_LIST = ["1~2등급", "2~3등급", "3~4등급"];
+
+  /* ===============================
+     1) 상단 메뉴 & URL 설정
      =============================== */
   const MENU_DATA = {
-
-    // 0. 성적별 수업 추천 (별도 처리)
-    "성적별 수업 추천": [],
 
     // 1. 학원 이용 가이드
     "학원 이용 가이드": [
@@ -210,7 +226,7 @@
     // 3. 바른공부 자습전용관
     "바른공부 자습전용관": [
       {
-        label: "자습전용관 운영·이용 안내",
+        label: "자습전용관 안내",
         desc: "바른공부 자습전용관 운영·이용 안내",
         url: "https://russeldc.megastudy.net/russel/info/study_hall/study_hall.asp"
       },
@@ -338,21 +354,28 @@
     ]
   };
 
+  /* ===============================
+     2) 공통 UI / 전역
+     =============================== */
+
   const chat = document.getElementById("chat");
   const btnList = document.getElementById("btn-list");
   const btnTitle = document.getElementById("btn-title");
 
-  const MAIN_MENUS = Object.keys(MENU_DATA);
+  // 메인 메뉴 + 성적별 추천 메뉴
+  const MAIN_MENUS = [...Object.keys(MENU_DATA), RECOMMEND_MENU_KEY];
 
-  // 구글 시트 연동 (기존 그대로 사용 가능)
+  // 구글 시트 웹훅 (단과환불용)
   const SHEET_WEBHOOK_URL =
     "https://script.google.com/macros/s/AKfycbyyz-H4DhCk3fRDOJIo55ReRVabSCccHLAmfNbsgBvu8z3IiyUJH10mWDR9Ca371tMM/exec";
 
-  const currentCoursesData = []; // 단과 환불용 더미 데이터
-
-  /* ===============================
-     2. 공통 메시지 / 버튼 렌더링
-     =============================== */
+  // 현재 수강중 강좌 목록 (단과 환불 선택용 - 실제 운용 시 데이터 넣기)
+  const currentCoursesData = [
+    // 예시:
+    // "고3 국어 심화반",
+    // "고3 수학 단과(기하)",
+    // "N수 영어 실전반"
+  ];
 
   function addBotMessage(text, linksHtml = "") {
     const wrap = document.createElement("div");
@@ -361,7 +384,9 @@
     const bubble = document.createElement("div");
     bubble.className = "bubble";
     bubble.textContent = text;
-    wrap.appendChild(bubble);        // 🔹 예전 '풍선껌' 오타 수정
+
+    // ★ 반드시 bubble을 붙여야 채팅이 보임
+    wrap.appendChild(bubble);
 
     if (linksHtml) {
       const box = document.createElement("div");
@@ -382,22 +407,18 @@
       const btn = document.createElement("button");
       btn.className = "chip-btn main";
       btn.textContent = menu;
-      btn.onclick = () => openMenu(menu);
+      btn.onclick = () => {
+        if (menu === RECOMMEND_MENU_KEY) {
+          openRecommendFlow();   // 성적별 추천 플로우
+        } else {
+          openMenu(menu);        // 일반 메뉴
+        }
+      };
       btnList.appendChild(btn);
     });
   }
 
-  /* ===============================
-     3. 상단 메뉴 클릭 처리
-     =============================== */
-
   function openMenu(menuName) {
-    // 3-1. 성적별 수업 추천은 별도 화면으로 분기
-    if (menuName === "성적별 수업 추천") {
-      renderGradeSubjectMenu();
-      return;
-    }
-
     const items = MENU_DATA[menuName];
     if (!items) return;
 
@@ -412,6 +433,7 @@
       btn.textContent = item.label;
       btn.title = item.desc;
 
+      // 나의 수강정보 메뉴 안에서만 특수 동작 분기
       if (menuName === "나의 수강정보" && item.label === "수강정보") {
         btn.onclick = () => handleCourseInfo();
       } else if (menuName === "나의 수강정보" && item.label === "대기정보") {
@@ -421,6 +443,7 @@
       } else if (menuName === "나의 수강정보" && item.label === "환불신청") {
         btn.onclick = () => renderRefundSubMenu();
       } else {
+        // 일반 메뉴: 링크 이동
         btn.onclick = () => {
           const html = `<a href="${item.url}" target="_blank">${item.label} 바로가기</a>`;
           addBotMessage(`${item.label} 페이지로 이동합니다.\n(${item.desc})`, html);
@@ -442,110 +465,118 @@
   }
 
   /* ===============================
-     4. 성적별 수업 추천 로직
+     3) 성적별 수업 추천 로직
      =============================== */
 
-  // russel.json 내용 캐시
-  let gradeDataCache = null;
-
-  async function loadGradeData() {
-    if (gradeDataCache) return gradeDataCache;
-    try {
-      const res = await fetch("russel.json");
-      if (!res.ok) throw new Error("russel.json load error");
-      gradeDataCache = await res.json();
-      return gradeDataCache;
-    } catch (e) {
-      console.error(e);
-      addBotMessage("등급별 수업 추천 데이터를 불러오지 못했습니다.\n(russel.json 파일을 확인해 주세요.)");
-      return null;
-    }
+  function recommendCourses(subject, levelText) {
+    return COURSE_DATA.filter(item =>
+      String(item.subject).replace(/\s/g, "") === subject &&
+      item.level_text === levelText
+    );
   }
 
-  // 4-1. 과목 선택 화면
-  function renderGradeSubjectMenu() {
-    addBotMessage("어떤 과목의 등급별 수업을 추천해 드릴까요?\n과목을 선택해 주세요.");
+  function showRecommendResult(subject, levelText) {
+    const list = recommendCourses(subject, levelText);
 
-    btnTitle.textContent = "성적별 수업 추천 - 과목 선택";
+    let text = `『${subject} / ${levelText}』 수업 추천입니다.\n\n`;
+
+    if (list.length === 0) {
+      text += "해당 조건의 강좌가 없습니다.";
+    } else {
+      list.forEach((c, idx) => {
+        text += `${idx + 1}. ${c.title} - ${c.teacher}\n`;
+        text += `   요일: ${c.day}, 시간: ${c.time_raw}\n\n`;
+      });
+    }
+
+    addBotMessage(text.trim());
+    renderRecommendResultButtons(subject, levelText);
+  }
+
+  function renderRecommendResultButtons(subject, levelText) {
+    btnTitle.textContent = `${subject} / ${levelText} 추천 결과`;
     btnList.innerHTML = "";
 
-    const subjects = ["국어", "수학", "영어", "한국사", "사회탐구", "과학탐구"];
+    const againBtn = document.createElement("button");
+    againBtn.className = "chip-btn";
+    againBtn.textContent = "다른 등급 보기";
+    againBtn.onclick = () => renderRecommendLevelButtons(subject);
+    btnList.appendChild(againBtn);
 
-    subjects.forEach(sub => {
+    const subjBtn = document.createElement("button");
+    subjBtn.className = "chip-btn";
+    subjBtn.textContent = "과목 다시 선택";
+    subjBtn.onclick = () => renderRecommendSubjectButtons();
+    btnList.appendChild(subjBtn);
+
+    const homeBtn = document.createElement("button");
+    homeBtn.className = "chip-btn";
+    homeBtn.textContent = "◀ 처음으로";
+    homeBtn.onclick = () => renderMainButtons();
+    btnList.appendChild(homeBtn);
+  }
+
+  function openRecommendFlow() {
+    addBotMessage(
+      "성적별 수업 추천입니다.\n" +
+      "원하시는 과목을 선택해주세요."
+    );
+    renderRecommendSubjectButtons();
+  }
+
+  function renderRecommendSubjectButtons() {
+    btnTitle.textContent = "과목 선택";
+    btnList.innerHTML = "";
+
+    SUBJECT_LIST.forEach(sub => {
       const btn = document.createElement("button");
       btn.className = "chip-btn";
       btn.textContent = sub;
-      btn.onclick = () => renderGradeSelect(sub);
+      btn.onclick = () => renderRecommendLevelButtons(sub);
       btnList.appendChild(btn);
     });
 
     const homeBtn = document.createElement("button");
     homeBtn.className = "chip-btn";
     homeBtn.textContent = "◀ 처음으로";
-    homeBtn.onclick = () => {
-      addBotMessage("처음 메뉴로 돌아갑니다.");
-      renderMainButtons();
-    };
+    homeBtn.onclick = () => renderMainButtons();
     btnList.appendChild(homeBtn);
   }
 
-  // 4-2. 등급 선택 화면
-  function renderGradeSelect(subject) {
-    addBotMessage(`${subject} 몇 등급인지 선택해 주세요.`);
-
-    btnTitle.textContent = `${subject} 등급 선택`;
+  function renderRecommendLevelButtons(subject) {
+    btnTitle.textContent = subject + " / 등급 선택";
     btnList.innerHTML = "";
 
-    const grades = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-
-    grades.forEach(g => {
+    LEVEL_LIST.forEach(lv => {
       const btn = document.createElement("button");
       btn.className = "chip-btn";
-      btn.textContent = `${g}등급`;
-      btn.onclick = () => showGradeRecommendation(subject, String(g));
+      btn.textContent = lv;
+      btn.onclick = () => showRecommendResult(subject, lv);
       btnList.appendChild(btn);
     });
 
     const backBtn = document.createElement("button");
     backBtn.className = "chip-btn";
     backBtn.textContent = "◀ 과목 다시 선택";
-    backBtn.onclick = () => renderGradeSubjectMenu();
+    backBtn.onclick = () => renderRecommendSubjectButtons();
     btnList.appendChild(backBtn);
   }
 
-  // 4-3. 추천 결과 표시
-  async function showGradeRecommendation(subject, grade) {
-    const data = await loadGradeData();
-    if (!data) return;
-
-    if (!data[subject] || !data[subject][grade]) {
-      addBotMessage(`${subject} ${grade}등급에 대한 추천 강좌 데이터가 아직 등록되지 않았습니다.\n데스크에 문의해 주세요.`);
-      return;
-    }
-
-    const list = data[subject][grade]; // ["수업1", "수업2", ...] 형태라고 가정
-
-    let msg = `📚 ${subject} ${grade}등급 학생에게 추천하는 강좌입니다.\n\n`;
-    list.forEach((name, idx) => {
-      msg += `${idx + 1}. ${name}\n`;
-    });
-
-    addBotMessage(msg);
-  }
-
   /* ===============================
-     5. 나의 수강정보 (기존 기능)
+     4) 나의 수강정보 / 환불 로직
      =============================== */
 
   function handleCourseInfo() {
-    const currentCourses = []; // 실제 연동 시 데이터 주입
+    const currentCourses = []; // 실사용 시 데이터 채우기
     const pastCourses = [];
 
     if (currentCourses.length === 0) {
       addBotMessage("📌 현재 수강중인 강좌가 없습니다.");
     } else {
       let msg = "📌 현재 수강중인 강좌 목록:\n\n";
-      currentCourses.forEach((c, i) => { msg += `${i + 1}. ${c}\n`; });
+      currentCourses.forEach((c, i) => {
+        msg += `${i + 1}. ${c}\n`;
+      });
       addBotMessage(msg);
     }
 
@@ -553,13 +584,15 @@
       addBotMessage("📚 지난 수강내역이 없습니다.");
     } else {
       let msg = "📚 지난 수강내역:\n\n";
-      pastCourses.forEach((c, i) => { msg += `${i + 1}. ${c}\n`; });
+      pastCourses.forEach((c, i) => {
+        msg += `${i + 1}. ${c}\n`;
+      });
       addBotMessage(msg);
     }
   }
 
   function handleWaitingInfo() {
-    const waitingList = []; // 실제 연동 시 데이터 주입
+    const waitingList = []; // 실사용 시 데이터 채우기
 
     if (waitingList.length === 0) {
       addBotMessage("현재 대기중인 강좌가 없습니다.");
@@ -576,7 +609,7 @@
   }
 
   function handlePaymentInfo() {
-    const paymentList = []; // 실제 연동 시 데이터 주입
+    const paymentList = []; // 실사용 시 데이터 채우기
 
     if (paymentList.length === 0) {
       addBotMessage("💳 결제내역이 없습니다.");
@@ -711,14 +744,15 @@
   }
 
   /* ===============================
-     6. 초기 안내 메시지
+     5) 초기 실행
      =============================== */
 
   function init() {
     const firstMsg =
       "안녕하세요. 메가스터디 러셀 대치학원 챗봇입니다.\n\n" +
-      "학원 이용, 모집요강, 단과 시간표, 자습전용관, 모의고사, 출강 선생님, 나의 수강정보, 성적별 수업 추천까지\n" +
-      "아래 버튼을 눌러서 궁금한 내용을 선택해 주세요.";
+      "학원 이용, 모집요강, 단과 시간표, 자습전용관, 모의고사, 출강 선생님 안내와\n" +
+      "나의 수강정보, 성적별 수업 추천 기능을 제공합니다.\n" +
+      "아래 버튼을 눌러 궁금한 내용을 선택해 주세요.";
     addBotMessage(firstMsg);
     renderMainButtons();
   }
